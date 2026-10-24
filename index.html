@@ -203,6 +203,10 @@ form.add select{min-height:42px;padding:6px 8px;background:var(--surface);border
 .sh-actions{display:flex;gap:10px;flex-wrap:wrap}
 .sh-actions .primary{flex:1}
 .note{font-size:14px;color:var(--muted)}
+.sortbtn{font-family:var(--f-display);font-size:14px;font-weight:600;min-height:40px;padding:6px 12px}
+.chip.sel{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.grp{margin:20px 0 4px}
+.grp:first-child{margin-top:0}
 .daynav{display:flex;flex-wrap:wrap;gap:8px}
 .daterow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .daterow input{min-height:40px;padding:4px 8px;background:var(--surface);border:1px solid var(--line);border-radius:6px;font-family:var(--f-mono)}
@@ -266,6 +270,8 @@ label.btn{display:inline-flex;align-items:center}
     </details>
     <div>
       <h2 id="openTitle">Открытые вопросы</h2>
+      <div class="chips" id="sortChips" role="group" aria-label="Порядок списка" style="margin-top:12px"></div>
+      <p class="note" id="sortHint" style="margin-top:8px"></p>
       <div class="list" id="errOpen" style="margin-top:12px"></div>
     </div>
     <details class="closed-box">
@@ -389,6 +395,27 @@ function tState(n){
 }
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
 function cmpErr(a,b){return a.streak-b.streak||a.t-b.t||a.q-b.q}
+function cmpOrder(a,b){return a.t-b.t||a.q-b.q}
+var SORTKEY='pdd-tracker-sort';
+var SORTS={
+  order:{t:'По порядку',h:'Тест за тестом, вопрос за вопросом.'},
+  weak:{t:'Слабые',h:'Сначала те, где меньше верных ответов подряд.'},
+  old:{t:'Давние',h:'Сначала те, которые дольше всего не повторяли.'},
+  fresh:{t:'Новые',h:'Сначала недавно допущенные ошибки.'},
+  topic:{t:'По темам',h:'Вопросы собраны по темам.'}
+};
+var sortMode='order';
+try{var sm=localStorage.getItem(SORTKEY);if(sm&&SORTS[sm])sortMode=sm}catch(e){}
+function topicIdx(e){var i=TOPICS.indexOf(e.topic);return (e.topic&&i>=0)?i:999}
+function sortErrs(list){
+  var a=list.slice();
+  if(sortMode==='weak')a.sort(cmpErr);
+  else if(sortMode==='old')a.sort(function(x,y){return x.lastDay<y.lastDay?-1:x.lastDay>y.lastDay?1:cmpOrder(x,y)});
+  else if(sortMode==='fresh')a.sort(function(x,y){return x.lastDay<y.lastDay?1:x.lastDay>y.lastDay?-1:cmpOrder(x,y)});
+  else if(sortMode==='topic')a.sort(function(x,y){return topicIdx(x)-topicIdx(y)||cmpOrder(x,y)});
+  else a.sort(cmpOrder);
+  return a;
+}
 function plate(e){return 'т'+e.t+'-в'+e.q}
 
 function saveRun(n,wrong,topic,why,date){
@@ -526,7 +553,7 @@ function renderTodayErr(){
   var el=$('#todayErr');el.replaceChildren();
   var ti=viewDate||iso(new Date());
   var open=S.errors.filter(function(e){return !e.closed});
-  var due=open.filter(function(e){return e.lastDay<ti}).sort(cmpErr);
+  var due=sortErrs(open.filter(function(e){return e.lastDay<ti}));
   el.append(h('h2',{},'Сначала ошибки'));
   var body;
   if(!open.length)body=h('div',{class:'empty',style:'margin-top:12px'},'Журнал пуст. После первого теста отметьте вопросы с ошибками, и они появятся здесь.');
@@ -547,7 +574,7 @@ function renderGrid(){
   }));
 }
 function renderErrors(){
-  var open=S.errors.filter(function(e){return !e.closed}).sort(cmpErr);
+  var open=S.errors.filter(function(e){return !e.closed});
   var closed=S.errors.filter(function(e){return e.closed}).sort(function(a,b){return a.t-b.t||a.q-b.q});
   var counts={};
   open.forEach(function(e){var k=e.topic||'Тема не указана';counts[k]=(counts[k]||0)+1});
@@ -561,7 +588,21 @@ function renderErrors(){
   $('#openTitle').textContent='Открытые вопросы ('+open.length+')';
   var ol=$('#errOpen');ol.replaceChildren();
   if(!open.length)ol.append(h('div',{class:'empty'},'Открытых вопросов нет.'));
-  open.forEach(function(e){ol.append(errRow(e,false))});
+  var lastGrp=null;
+  sortErrs(open).forEach(function(e){
+    if(sortMode==='topic'){
+      var g=e.topic||'Тема не указана';
+      if(g!==lastGrp){ol.append(h('h3',{class:'k grp'},g));lastGrp=g}
+    }
+    ol.append(errRow(e,false));
+  });
+  var sc=$('#sortChips');sc.replaceChildren();
+  Object.keys(SORTS).forEach(function(k){
+    sc.append(h('button',{type:'button',class:'chip sortbtn'+(k===sortMode?' sel':''),'aria-pressed':String(k===sortMode),onclick:function(){
+      sortMode=k;try{localStorage.setItem(SORTKEY,k)}catch(e){}render();
+    }},SORTS[k].t));
+  });
+  $('#sortHint').textContent=SORTS[sortMode].h;
   $('#closedTitle').textContent='Закрытые ('+closed.length+')';
   var cl=$('#errClosed');cl.replaceChildren();
   if(!closed.length)cl.append(h('p',{class:'note',style:'padding-top:4px'},'Сюда попадают вопросы, на которые вы ответили верно в три разных дня.'));
