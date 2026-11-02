@@ -240,6 +240,7 @@ label.btn{display:inline-flex;align-items:center}
           <li>Решите тест на сайте. Затем откройте «Тесты», нажмите на его номер и отметьте вопросы, где ошиблись. Если ошибок нет, ничего не отмечайте.</li>
           <li>Неверные вопросы попадают в журнал. Вопрос закрывается, когда вы ответили на него верно в три разных дня.</li>
           <li>Кнопка «Верно» засчитывается раз в день. Если вы заново решили тест и не отметили старую ошибку, она тоже засчитается как верный ответ.</li>
+          <li>Пропустили несколько дней? На вкладке «План» нажмите «Пересобрать план с сегодня»: план начнётся с закрепления пройденного, а дальше пойдут новые тесты.</li>
         </ul>
       </div>
     </details>
@@ -375,7 +376,102 @@ function buildPlan(){
   }
   return out;
 }
-var plan=buildPlan();
+var plan=[];
+/* ---------- план после перерыва ---------- */
+var RESTART='2026-11-02',PLAN_END='2026-11-22',HIKE='2026-10-29';
+var PH={refresh:'Закрепление',new:'Новые тесты',ctl:'Контроль',all:'Контроль',mix:'Повтор',tix:'Финал',skip:'Поход',old:'До перерыва'};
+function parseD(s){var p=s.split('-');return new Date(+p[0],+p[1]-1,+p[2])}
+function addD(s,k){var d=parseD(s);d.setDate(d.getDate()+k);return iso(d)}
+function num(a,b){return a-b}
+function lastRun(n){var r=(S.tests[n]&&S.tests[n].runs)||[];return r.length?r[r.length-1]:{d:'',s:20}}
+function topTopics(){
+  var c={};
+  S.errors.forEach(function(e){if(!e.closed&&e.topic&&e.topic!=='Другое')c[e.topic]=(c[e.topic]||0)+1});
+  return Object.keys(c).sort(function(a,b){return c[b]-c[a]}).slice(0,2);
+}
+function genPlan(start,end){
+  var n0=Math.round((parseD(end)-parseD(start))/864e5)+1;
+  if(n0<1)return [];
+  var all=range(1,40);
+  var doneT=all.filter(function(n){return tState(n).k!=='none'});
+  var todo=all.filter(function(n){return tState(n).k==='none'});
+  var weak=doneT.slice().sort(function(a,b){var x=lastRun(a),y=lastRun(b);return x.s-y.s||(x.d<y.d?-1:x.d>y.d?1:0)||a-b});
+  var days=[];
+  for(var i=0;i<n0;i++)days.push({date:addD(start,i),newT:[],revT:[],ctlT:[],label:'',kind:''});
+  // конец плана: контроль всех 40, пять дней вразнобой, два дня билетов
+  var TAIL=['all','mix','mix','mix','mix','mix','tix','tix'];
+  var tl=Math.min(TAIL.length,n0),tail=TAIL.slice(TAIL.length-tl),front=n0-tl,m=0;
+  tail.forEach(function(k,j){
+    var d=days[front+j];d.kind=k;
+    if(k==='all'){d.ctlT=all.slice();d.label='Контроль: тесты 1–40 подряд, затем все ошибки из журнала'}
+    else if(k==='mix'){var r=m++;d.ctlT=all.filter(function(n){return (n-1)%5===r});d.label='8 тестов вразнобой и все тесты с ошибками'}
+    else d.label='Экзаменационные билеты и повтор слабых тем';
+  });
+  // закрепление: всё пройденное заново, слабые тесты в первые дни
+  var a=doneT.length===0?0:(doneT.length<=8?1:(doneT.length<=16?2:3));
+  a=Math.min(a,front);
+  var tt=topTopics(),size=a?Math.ceil(weak.length/a):0;
+  for(var k=0;k<a;k++){
+    var d=days[k];d.kind='refresh';
+    d.ctlT=weak.slice(k*size,(k+1)*size).sort(num);
+    d.label='После перерыва: сначала все открытые ошибки из журнала, потом эти тесты заново до 20/20.'+
+      (k===0&&tt.length?' Перед тестами перечитайте в ПДД '+(tt.length>1?'темы ':'тему ')+tt.map(function(x){return '«'+x+'»'}).join(' и ')+'.':'');
+  }
+  // новые тесты с повтором двух предыдущих дней, по воскресеньям контроль
+  var bIdx=[];for(var b=a;b<front;b++)bIdx.push(b);
+  var solved=doneT.slice();
+  if(todo.length){
+    var work=bIdx.filter(function(i){return parseD(days[i].date).getDay()!==0});
+    if(!work.length)work=bIdx.slice();
+    var base=work.length?Math.floor(todo.length/work.length):0,extra=work.length?todo.length%work.length:0;
+    var prev=[],wi=0;
+    bIdx.forEach(function(i){
+      var d=days[i];
+      if(work.indexOf(i)>=0){
+        var cnt=base+(wi<extra?1:0);wi++;
+        d.kind='new';d.newT=todo.splice(0,cnt);
+        d.revT=prev.slice(-2).reduce(function(x,y){return x.concat(y)},[]);
+        if(d.revT.length+d.newT.length>9)d.revT=(prev[prev.length-1]||[]).slice();
+        if(d.newT.length)prev.push(d.newT);
+        solved=solved.concat(d.newT);
+        if(!d.newT.length&&!d.revT.length){d.kind='mix';d.label='Повтор: заново все тесты, где в последнем проходе были ошибки'}
+      }else{
+        d.kind='ctl';d.ctlT=solved.slice().sort(num);
+        d.label=d.ctlT.length?'Контроль: тесты '+fmt(d.ctlT)+' подряд, затем слабые места':'Отдых';
+      }
+    });
+  }else{
+    var rot=weak.length?weak:all,p=0;
+    bIdx.forEach(function(i){
+      var d=days[i];d.kind='mix';d.ctlT=[];
+      for(var q=0;q<8&&q<rot.length;q++){d.ctlT.push(rot[p%rot.length]);p++}
+      d.ctlT.sort(num);d.label='8 тестов вразнобой, слабые первыми, и все тесты с ошибками';
+    });
+  }
+  if(todo.length&&days.length){var tg=days[Math.min(a,days.length-1)];tg.newT=tg.newT.concat(todo)}
+  return days;
+}
+function rebuildPlan(){
+  if(!S.plan||!Array.isArray(S.plan.days)){S.plan={start:RESTART,end:PLAN_END,days:genPlan(RESTART,PLAN_END)};cacheLocal()}
+  var firstNew=S.plan.days.length?S.plan.days[0].date:RESTART;
+  var old=buildPlan().filter(function(d){return d.date<firstNew});
+  old.forEach(function(d){
+    if(d.date>=HIKE&&d.date<RESTART){d.newT=[];d.revT=[];d.ctlT=[];d.label='Поход: эти дни пропущены и в плане не считаются';d.skip=true;d.kind='skip'}
+    else d.kind='old';
+  });
+  var neu=S.plan.days.map(function(x){return {date:x.date,dt:parseD(x.date),newT:x.newT||[],revT:x.revT||[],ctlT:x.ctlT||[],label:x.label||'',kind:x.kind||''}});
+  plan=old.concat(neu);
+  plan.forEach(function(d,i){d.i=i});
+}
+function regenFromToday(end){
+  var ti=iso(new Date());
+  var keep=S.plan.days.filter(function(d){return d.date<ti});
+  var st=keep.length?addD(keep[keep.length-1].date,1):(S.plan.days.length?S.plan.days[0].date:RESTART);
+  var minEnd=addD(ti,6);
+  if(!end||end<minEnd)end=minEnd;
+  S.plan={start:S.plan.start||RESTART,end:end,days:keep.concat(genPlan(st,end))};
+  touch();rebuildPlan();viewDate=null;render();
+}
 
 /* ---------- состояние ---------- */
 function blank(){return {v:1,u:0,tests:{},days:{},errors:[]}}
@@ -385,6 +481,7 @@ function cacheLocal(){try{localStorage.setItem(LS,JSON.stringify(S))}catch(e){}}
 var S=loadLocal();
 if(!S){S=clone(SEED);cacheLocal()}
 var viewDate=null;
+rebuildPlan();
 function touch(){S.u=Date.now();cacheLocal()}
 
 function tState(n){
@@ -487,16 +584,17 @@ function renderStats(){
   var ti=iso(new Date());
   var perfect=range(1,40).filter(function(n){return tState(n).k==='ok'}).length;
   var open=S.errors.filter(function(e){return !e.closed}).length;
-  var done=plan.filter(function(d){return S.days[d.date]}).length;
+  var counted=plan.filter(function(d){return !d.skip});
+  var done=counted.filter(function(d){return S.days[d.date]}).length;
   var t0=new Date();t0.setHours(0,0,0,0);
   var tl,tv;
-  if(ti<plan[0].date){tl='До старта';tv=Math.round((new Date(2026,9,19)-t0)/864e5)+' дн.'}
+  if(ti<plan[0].date){tl='До старта';tv=Math.round((parseD(plan[0].date)-t0)/864e5)+' дн.'}
   else if(ti>plan[plan.length-1].date){tl='План';tv='завершён'}
-  else{var diff=Math.round((new Date(2026,10,22)-t0)/864e5);tl='До конца плана';tv=diff===0?'сегодня':diff+' дн.'}
+  else{var diff=Math.round((parseD(plan[plan.length-1].date)-t0)/864e5);tl='До конца плана';tv=diff===0?'сегодня':diff+' дн.'}
   var box=$('#stats');box.replaceChildren(
     h('div',{class:'stat'},h('span',{class:'k'},'Тесты на 20/20'),h('span',{class:'v'},String(perfect),h('small',{},' / 40'))),
     h('div',{class:'stat'},h('span',{class:'k'},'Открытые ошибки'),h('span',{class:'v'},String(open))),
-    h('div',{class:'stat'},h('span',{class:'k'},'Дней отмечено'),h('span',{class:'v'},String(done),h('small',{},' / 35'))),
+    h('div',{class:'stat'},h('span',{class:'k'},'Дней отмечено'),h('span',{class:'v'},String(done),h('small',{},' / '+counted.length))),
     h('div',{class:'stat'},h('span',{class:'k'},tl),h('span',{class:'v'},tv))
   );
   var ds=$('#dashes');
@@ -537,16 +635,19 @@ function renderToday(){
   var cb=h('input',{type:'checkbox',checked:!!S.days[cur.date],onchange:function(ev){
     if(ev.target.checked)S.days[cur.date]=true;else delete S.days[cur.date];touch();render();
   }});
+  var neu=plan.filter(function(x){return x.kind!=='old'&&!x.skip});
+  var kn=neu.indexOf(cur);
+  var sub=[PH[cur.kind]||''].concat(kn>=0?['день '+(kn+1)+' из '+neu.length]:[]).concat(viewDate<ti?['прошедший день']:[]).filter(Boolean).join(' · ');
   el.append(h('div',{class:'panel'},
     nav,
     h('div',{},h('h2',{},WDF[dt.getDay()]+', '+dt.getDate()+' '+MON[dt.getMonth()]),
-      h('p',{class:'muted'},'День '+(cur.i+1)+' из 35 · неделя '+(Math.floor(cur.i/7)+1)+(viewDate<ti?' · прошедший день':''))),
+      h('p',{class:'muted'},sub)),
     cur.label?h('p',{class:'lbl'},cur.label):null,
     cur.newT.length?group('Новые тесты',cur.newT,cur.date):null,
     cur.revT.length?group('Повтор',cur.revT,cur.date):null,
-    cur.ctlT.length?group('Тесты',cur.ctlT,cur.date):null,
-    nothing?h('p',{class:'muted'},'Новых тестов сегодня нет.'):null,
-    h('label',{class:'check'},cb,'День выполнен')
+    cur.ctlT.length?group(cur.kind==='refresh'?'Решить заново':'Тесты',cur.ctlT,cur.date):null,
+    (nothing&&!cur.label)?h('p',{class:'muted'},'Новых тестов сегодня нет.'):null,
+    cur.skip?null:h('label',{class:'check'},cb,'День выполнен')
   ));
 }
 function renderTodayErr(){
@@ -554,13 +655,15 @@ function renderTodayErr(){
   var ti=viewDate||iso(new Date());
   var open=S.errors.filter(function(e){return !e.closed});
   var due=sortErrs(open.filter(function(e){return e.lastDay<ti}));
+  var cd=plan.find(function(d){return d.date===ti});
+  var lim=(cd&&cd.kind==='refresh')?999:8;
   el.append(h('h2',{},'Сначала ошибки'));
   var body;
   if(!open.length)body=h('div',{class:'empty',style:'margin-top:12px'},'Журнал пуст. После первого теста отметьте вопросы с ошибками, и они появятся здесь.');
   else if(!due.length)body=h('div',{class:'empty',style:'margin-top:12px'},'На сегодня все открытые вопросы уже засчитаны.');
   else{
-    body=h('div',{class:'list',style:'margin-top:12px'},due.slice(0,8).map(function(e){return errRow(e,true,ti)}));
-    if(due.length>8)body=h('div',{},body,h('p',{class:'note',style:'margin-top:10px'},'Ещё '+(due.length-8)+' во вкладке «Ошибки».'));
+    body=h('div',{class:'list',style:'margin-top:12px'},due.slice(0,lim).map(function(e){return errRow(e,true,ti)}));
+    if(due.length>lim)body=h('div',{},body,h('p',{class:'note',style:'margin-top:10px'},'Ещё '+(due.length-lim)+' во вкладке «Ошибки».'));
   }
   el.append(body);
 }
@@ -616,28 +719,51 @@ function renderErrors(){
 function renderCal(){
   var el=$('#cal');el.replaceChildren();
   var ti=iso(new Date());
-  for(var w=0;w<5;w++){
+  var fn=plan.find(function(d){return d.kind!=='old'&&!d.skip});
+  var firstNew=fn?fn.date:plan[plan.length-1].date;
+  var histBox=h('div',{});
+  var hist=h('details',{class:'closed-box'},h('summary',{},'До перерыва: '+dm(plan[0].date)+'–'+dm(addD(firstNew,-1))),histBox);
+  var wn=0,newWrap=h('div',{});
+  for(var w=0;w*7<plan.length;w++){
     var days=plan.slice(w*7,w*7+7);
-    var sec=h('section',{class:'week',style:w?'margin-top:24px':''},
-      h('h3',{},'Неделя '+(w+1),h('span',{class:'muted'},dm(days[0].date)+'–'+dm(days[6].date))));
+    var isOld=days[days.length-1].date<firstNew;
+    if(!isOld)wn++;
+    var sec=h('section',{class:'week',style:(isOld?w:wn-1)?'margin-top:24px':''},
+      h('h3',{},isOld?'Неделя '+(w+1):'Неделя '+wn,h('span',{class:'muted'},dm(days[0].date)+'–'+dm(days[days.length-1].date))));
     days.forEach(function(d){
       var isToday=d.date===ti;
       var hasWork=d.newT.length||d.revT.length||d.ctlT.length;
-      var missed=d.date<ti&&!S.days[d.date];
-      var cb=h('input',{type:'checkbox',checked:!!S.days[d.date],'aria-label':'Отметить '+dm(d.date)+' выполненным',onchange:function(ev){
+      var missed=d.date<ti&&!S.days[d.date]&&d.kind!=='old';
+      var cb=d.skip?h('span',{}):h('input',{type:'checkbox',checked:!!S.days[d.date],'aria-label':'Отметить '+dm(d.date)+' выполненным',onchange:function(ev){
         if(ev.target.checked)S.days[d.date]=true;else delete S.days[d.date];touch();render();
       }});
       var content=h('div',{class:'content'});
-      if(d.label)content.append(h('span',{class:'txt'},d.label));
-      if(d.newT.length)content.append(h('span',{class:'k'},'Новые'),d.newT.map(function(n){return chip(n,d.date)}));
+      if(d.kind&&d.kind!=='old'&&d.kind!=='new'&&PH[d.kind])content.append(h('span',{class:'k'},PH[d.kind]));
+      if(d.label)content.append(h('span',{class:'txt'+(d.skip?' muted':'')},d.label));
+      if(d.newT.length)content.append.apply(content,[h('span',{class:'k'},'Новые')].concat(d.newT.map(function(n){return chip(n,d.date)})));
       if(d.revT.length)content.append(h('span',{class:'k'},'Повтор'),h('span',{class:'txt'},fmt(d.revT)));
       if(!d.label&&!d.newT.length&&!d.revT.length)content.append(h('span',{class:'txt muted'},'Отдых'));
-      if(d.ctlT.length&&d.ctlT.length<=8)content.append(h('span',{class:'txt'},'Тесты: '+fmt(d.ctlT)));
+      if(d.ctlT.length&&(d.kind==='refresh'||d.kind==='mix'||(d.kind==='old'&&d.ctlT.length<=8)))content.append(h('span',{class:'txt'},'Тесты: '+fmt(d.ctlT)));
       sec.append(h('div',{class:'day'+(isToday?' today':'')},cb,
         h('div',{class:'dt'},WD[d.dt.getDay()]+' '+dm(d.date),(missed&&hasWork)?h('small',{},'не отмечен'):null),content));
     });
-    el.append(sec);
+    (isOld?histBox:newWrap).append(sec);
   }
+  el.append(newWrap);
+  if(histBox.childNodes.length){hist.style.marginTop='24px';el.append(hist)}
+  var endIn=h('input',{type:'date',id:'planEnd',value:(S.plan&&S.plan.end)||PLAN_END,min:addD(ti,6),'aria-label':'Последний день подготовки'});
+  var armed=false,tm=0;
+  var btn=h('button',{type:'button',class:'btn'},'Пересобрать план с сегодня');
+  btn.addEventListener('click',function(){
+    if(!armed){armed=true;btn.textContent='Точно пересобрать?';btn.classList.add('danger');
+      tm=setTimeout(function(){armed=false;btn.textContent='Пересобрать план с сегодня';btn.classList.remove('danger')},4000);return}
+    clearTimeout(tm);regenFromToday(endIn.value);
+  });
+  el.append(h('div',{class:'panel',style:'margin-top:28px'},
+    h('h2',{},'Пропустили дни?'),
+    h('p',{class:'muted'},'План пересоберётся с сегодняшнего дня по вашим результатам: сначала закрепление пройденного, потом новые тесты, в конце контроль и билеты. Прошедшие дни, отметки и результаты останутся.'),
+    h('div',{class:'daterow'},h('span',{class:'k'},'Последний день'),endIn),
+    btn));
 }
 function render(){renderStats();renderToday();renderTodayErr();renderGrid();renderErrors();renderCal()}
 
