@@ -1,4 +1,4 @@
-const CACHE = 'pdd-v3';
+const CACHE = 'pdd-v4';
 const CORE = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {

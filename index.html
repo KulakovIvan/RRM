@@ -378,7 +378,7 @@ function buildPlan(){
 }
 var plan=[];
 /* ---------- план после перерыва ---------- */
-var RESTART='2026-11-02',PLAN_END='2026-11-22',HIKE='2026-10-29';
+var RESTART='2026-11-04',PLAN_END='2026-11-22',HIKE='2026-10-29';
 var PH={refresh:'Закрепление',new:'Новые тесты',ctl:'Контроль',all:'Контроль',mix:'Повтор',tix:'Финал',skip:'Поход',old:'До перерыва'};
 function parseD(s){var p=s.split('-');return new Date(+p[0],+p[1]-1,+p[2])}
 function addD(s,k){var d=parseD(s);d.setDate(d.getDate()+k);return iso(d)}
@@ -452,7 +452,11 @@ function genPlan(start,end){
   return days;
 }
 function rebuildPlan(){
-  if(!S.plan||!Array.isArray(S.plan.days)){S.plan={start:RESTART,end:PLAN_END,days:genPlan(RESTART,PLAN_END)};cacheLocal()}
+  // план версии 1 начинался 2 ноября; поход продлился до 3-го, поэтому собираем заново с 4-го
+  if(!S.plan||!Array.isArray(S.plan.days)||(S.plan.v!==2&&(!S.plan.days.length||S.plan.days[0].date<RESTART))){
+    var pe=(S.plan&&S.plan.end)||PLAN_END;
+    S.plan={v:2,start:RESTART,end:pe,days:genPlan(RESTART,pe)};cacheLocal();
+  }
   var firstNew=S.plan.days.length?S.plan.days[0].date:RESTART;
   var old=buildPlan().filter(function(d){return d.date<firstNew});
   old.forEach(function(d){
@@ -469,7 +473,7 @@ function regenFromToday(end){
   var st=keep.length?addD(keep[keep.length-1].date,1):(S.plan.days.length?S.plan.days[0].date:RESTART);
   var minEnd=addD(ti,6);
   if(!end||end<minEnd)end=minEnd;
-  S.plan={start:S.plan.start||RESTART,end:end,days:keep.concat(genPlan(st,end))};
+  S.plan={v:2,start:S.plan.start||RESTART,end:end,days:keep.concat(genPlan(st,end))};
   touch();rebuildPlan();viewDate=null;render();
 }
 
