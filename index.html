@@ -203,6 +203,10 @@ form.add select{min-height:42px;padding:6px 8px;background:var(--surface);border
 .sh-actions{display:flex;gap:10px;flex-wrap:wrap}
 .sh-actions .primary{flex:1}
 .note{font-size:14px;color:var(--muted)}
+.dhead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pill{font-family:var(--f-mono);font-size:13px;font-weight:600;padding:4px 11px;border-radius:999px;border:1px solid var(--line);color:var(--muted);font-variant-numeric:tabular-nums}
+.pill.all{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+.err.done{opacity:.5}
 .sortbtn{font-family:var(--f-display);font-size:14px;font-weight:600;min-height:40px;padding:6px 12px}
 .chip.sel{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 .grp{margin:20px 0 4px}
@@ -241,6 +245,7 @@ label.btn{display:inline-flex;align-items:center}
           <li>Неверные вопросы попадают в журнал. Вопрос закрывается, когда вы ответили на него верно в три разных дня.</li>
           <li>Кнопка «Верно» засчитывается раз в день. Если вы заново решили тест и не отметили старую ошибку, она тоже засчитается как верный ответ.</li>
           <li>Пропустили несколько дней? На вкладке «План» нажмите «Пересобрать план с сегодня»: план начнётся с закрепления пройденного, а дальше пойдут новые тесты.</li>
+          <li>Блок «Повторить сегодня» каждый день сам собирает порцию: 2–3 теста, которые решали давно, и 10 ошибок из журнала, которые дольше всего не повторяли. Тест с ошибками возвращается через 2 дня, тест на 20/20 через 3 дня, после нескольких чистых проходов через 5, 9 и 16 дней. В дни закрепления и контроля тестов в порции нет: их и так решаете по плану.</li>
         </ul>
       </div>
     </details>
@@ -378,8 +383,8 @@ function buildPlan(){
 }
 var plan=[];
 /* ---------- план после перерыва ---------- */
-var RESTART='2026-11-04',PLAN_END='2026-11-22',HIKE='2026-10-29';
-var PH={refresh:'Закрепление',new:'Новые тесты',ctl:'Контроль',all:'Контроль',mix:'Повтор',tix:'Финал',skip:'Поход',old:'До перерыва'};
+var RESTART='2026-11-04',RESTART3='2026-11-09',PLAN_END='2026-11-22',HIKE='2026-10-29';
+var PH={refresh:'Закрепление',new:'Новые тесты',ctl:'Контроль',all:'Контроль',mix:'Повтор',tix:'Финал',skip:'Пропуск',old:'До перерыва'};
 function parseD(s){var p=s.split('-');return new Date(+p[0],+p[1]-1,+p[2])}
 function addD(s,k){var d=parseD(s);d.setDate(d.getDate()+k);return iso(d)}
 function num(a,b){return a-b}
@@ -451,30 +456,73 @@ function genPlan(start,end){
   if(todo.length&&days.length){var tg=days[Math.min(a,days.length-1)];tg.newT=tg.newT.concat(todo)}
   return days;
 }
+// сколько дней нужно, чтобы закрепить пройденное, решить оставшиеся тесты по 3 в день и пройти финал
+function neededEnd(st,minEnd){
+  var doneN=range(1,40).filter(function(n){return tState(n).k!=='none'}).length,left=40-doneN;
+  var a=doneN===0?0:(doneN<=8?1:(doneN<=16?2:3));
+  var d=addD(st,a);
+  while(left>0){if(parseD(d).getDay()!==0)left-=3;d=addD(d,1)}
+  var end=addD(d,7);
+  return (minEnd&&minEnd>end)?minEnd:end;
+}
+function flagDay(d){
+  if(d.date>=HIKE&&d.date<RESTART){d.newT=[];d.revT=[];d.ctlT=[];d.label='Поход: эти дни пропущены и в плане не считаются';d.skip=true;d.kind='skip';return}
+  if(d.date>=RESTART&&d.date<(S.plan.from||RESTART)&&!S.days[d.date]){d.newT=[];d.revT=[];d.ctlT=[];d.label='Пропущено: этот день в плане не считается';d.skip=true;d.kind='skip'}
+}
 function rebuildPlan(){
-  // план версии 1 начинался 2 ноября; поход продлился до 3-го, поэтому собираем заново с 4-го
-  if(!S.plan||!Array.isArray(S.plan.days)||(S.plan.v!==2&&(!S.plan.days.length||S.plan.days[0].date<RESTART))){
-    var pe=(S.plan&&S.plan.end)||PLAN_END;
-    S.plan={v:2,start:RESTART,end:pe,days:genPlan(RESTART,pe)};cacheLocal();
+  // версия 3: занятия возобновляются 9 ноября, дни до этого остаются в истории
+  if(!S.plan||!Array.isArray(S.plan.days)||S.plan.v!==3){
+    var keep=(S.plan&&Array.isArray(S.plan.days)?S.plan.days:[]).filter(function(d){return d.date<RESTART3});
+    var end=neededEnd(RESTART3,(S.plan&&S.plan.end)||PLAN_END);
+    S.plan={v:3,start:RESTART,from:RESTART3,end:end,days:keep.concat(genPlan(RESTART3,end))};
+    S.daily=null;cacheLocal();
   }
-  var firstNew=S.plan.days.length?S.plan.days[0].date:RESTART;
+  var firstNew=S.plan.days.length?S.plan.days[0].date:RESTART3;
   var old=buildPlan().filter(function(d){return d.date<firstNew});
-  old.forEach(function(d){
-    if(d.date>=HIKE&&d.date<RESTART){d.newT=[];d.revT=[];d.ctlT=[];d.label='Поход: эти дни пропущены и в плане не считаются';d.skip=true;d.kind='skip'}
-    else d.kind='old';
+  old.forEach(function(d){d.kind='old';flagDay(d)});
+  var neu=S.plan.days.map(function(x){
+    var d={date:x.date,dt:parseD(x.date),newT:x.newT||[],revT:x.revT||[],ctlT:x.ctlT||[],label:x.label||'',kind:x.kind||''};
+    flagDay(d);return d;
   });
-  var neu=S.plan.days.map(function(x){return {date:x.date,dt:parseD(x.date),newT:x.newT||[],revT:x.revT||[],ctlT:x.ctlT||[],label:x.label||'',kind:x.kind||''}});
   plan=old.concat(neu);
   plan.forEach(function(d,i){d.i=i});
 }
 function regenFromToday(end){
   var ti=iso(new Date());
   var keep=S.plan.days.filter(function(d){return d.date<ti});
-  var st=keep.length?addD(keep[keep.length-1].date,1):(S.plan.days.length?S.plan.days[0].date:RESTART);
+  var st=keep.length?addD(keep[keep.length-1].date,1):(S.plan.days.length?S.plan.days[0].date:RESTART3);
   var minEnd=addD(ti,6);
   if(!end||end<minEnd)end=minEnd;
-  S.plan={v:2,start:S.plan.start||RESTART,end:end,days:keep.concat(genPlan(st,end))};
+  S.plan={v:3,start:S.plan.start||RESTART,from:st,end:end,days:keep.concat(genPlan(st,end))};
+  S.daily=null;
   touch();rebuildPlan();viewDate=null;render();
+}
+
+/* ---------- порция повторения на день ---------- */
+function daysBetween(a,b){return Math.round((parseD(b)-parseD(a))/864e5)}
+function perfStreak(n){var r=(S.tests[n]&&S.tests[n].runs)||[],k=0;for(var i=r.length-1;i>=0&&r[i].s===20;i--)k++;return k}
+// через сколько дней тест снова пора решить: с ошибками через 2 дня, чистые 20/20 всё реже
+function testInterval(n){return lastRun(n).s<20?2:[3,5,9,16][Math.min(perfStreak(n),4)-1]}
+function pickDaily(ti){
+  var cd=plan.find(function(d){return d.date===ti});
+  var busy={};
+  if(cd)cd.newT.concat(cd.revT,cd.ctlT).forEach(function(n){busy[n]=1});
+  var due=range(1,40).filter(function(n){
+    if(busy[n]||tState(n).k==='none')return false;
+    var lr=lastRun(n);return lr.d&&lr.d<ti&&daysBetween(lr.d,ti)>=testInterval(n);
+  }).map(function(n){var lr=lastRun(n);return {n:n,over:daysBetween(lr.d,ti)-testInterval(n),s:lr.s}})
+    .sort(function(a,b){return b.over-a.over||a.s-b.s||a.n-b.n});
+  var heavy=!cd||cd.skip||['refresh','all','ctl','mix'].indexOf(cd.kind)>=0;
+  var kT=heavy?0:(due.length>8?3:2);
+  var openE=S.errors.filter(function(e){return !e.closed&&e.lastDay<ti})
+    .sort(function(a,b){return a.lastDay<b.lastDay?-1:a.lastDay>b.lastDay?1:cmpOrder(a,b)});
+  var kE=(cd&&cd.kind==='refresh')?openE.length:(openE.length>30?15:10);
+  return {date:ti,tests:due.slice(0,kT).map(function(x){return x.n}),errs:openE.slice(0,kE).map(function(e){return e.id})};
+}
+function daily(){
+  var ti=iso(new Date());
+  if(!S.daily||S.daily.date!==ti){S.daily=pickDaily(ti);cacheLocal()}
+  return S.daily;
 }
 
 /* ---------- состояние ---------- */
@@ -654,14 +702,44 @@ function renderToday(){
     cur.skip?null:h('label',{class:'check'},cb,'День выполнен')
   ));
 }
+function renderDaily(el,ti){
+  var dl=daily();
+  var tests=dl.tests||[];
+  var errs=(dl.errs||[]).map(function(id){return S.errors.find(function(e){return e.id===id})}).filter(Boolean);
+  var tDone=tests.filter(function(n){return ((S.tests[n]&&S.tests[n].runs)||[]).some(function(r){return r.d===ti})}).length;
+  var eDone=errs.filter(function(e){return e.closed||e.lastDay>=ti}).length;
+  var total=tests.length+errs.length,doneN=tDone+eDone;
+  el.append(h('div',{class:'dhead'},h('h2',{},'Повторить сегодня'),
+    total?h('span',{class:'pill'+(doneN===total?' all':'')},doneN===total?'Готово':doneN+' из '+total):null));
+  if(!total){
+    el.append(h('div',{class:'empty',style:'margin-top:12px'},S.errors.some(function(e){return !e.closed})?
+      'На сегодня повторять нечего: открытые вопросы уже засчитаны, давно решённых тестов, которым пора на повтор, нет.':
+      'Повторять пока нечего. Ошибки из тестов и давно решённые тесты будут появляться здесь сами.'));
+    return;
+  }
+  el.append(h('p',{class:'note',style:'margin-top:6px'},'Порция собрана на сегодня из того, что дольше всего не повторяли. Что не успеете, попадёт в следующие дни.'));
+  if(tests.length){
+    el.append(h('div',{class:'group',style:'margin-top:14px'},h('h3',{class:'k'},'Давно решённые тесты'),
+      h('div',{class:'chips'},tests.map(function(n){return chip(n,ti)})),
+      h('p',{class:'note'},tests.map(function(n){var lr=lastRun(n);return 'Т'+n+': '+lr.s+'/20, '+dm(lr.d)}).join(' · '))));
+  }
+  if(errs.length){
+    var list=h('div',{class:'list',style:'margin-top:8px'},sortErrs(errs).map(function(e){
+      var row=errRow(e,true,ti);if(e.closed||e.lastDay>=ti)row.classList.add('done');return row;
+    }));
+    el.append(h('div',{style:'margin-top:16px'},h('h3',{class:'k'},'Ошибки из журнала: '+eDone+' из '+errs.length),list));
+  }
+}
 function renderTodayErr(){
   var el=$('#todayErr');el.replaceChildren();
-  var ti=viewDate||iso(new Date());
+  var today=iso(new Date());
+  var ti=viewDate||today;
+  if(ti===today){renderDaily(el,today);return}
   var open=S.errors.filter(function(e){return !e.closed});
   var due=sortErrs(open.filter(function(e){return e.lastDay<ti}));
   var cd=plan.find(function(d){return d.date===ti});
   var lim=(cd&&cd.kind==='refresh')?999:8;
-  el.append(h('h2',{},'Сначала ошибки'));
+  el.append(h('h2',{},'Ошибки на этот день'));
   var body;
   if(!open.length)body=h('div',{class:'empty',style:'margin-top:12px'},'Журнал пуст. После первого теста отметьте вопросы с ошибками, и они появятся здесь.');
   else if(!due.length)body=h('div',{class:'empty',style:'margin-top:12px'},'На сегодня все открытые вопросы уже засчитаны.');
